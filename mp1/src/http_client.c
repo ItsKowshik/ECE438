@@ -1,7 +1,8 @@
+//3180300806
 /*
 ** client.c -- a stream socket client demo
 */
-
+//Import all libraries
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -12,14 +13,9 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
-#include <iostream>
-#include <fstream>
 
-using namespace std;
-
-#define PORT "3490" // the port client will be connecting to 
-
-#define MAXDATASIZE 4096 // max number of bytes we can get at once  
+#define PORT "3490" // The port for the client to conenct to
+#define SIZE 1024 // max number of bytes we can get at once 
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -33,46 +29,79 @@ void *get_in_addr(struct sockaddr *sa)
 
 int main(int argc, char *argv[])
 {
-	string addr, protocol, host, port, path;
-	int sockfd, numbytes;  
-	char buf[MAXDATASIZE];
+	//Declare all the variables
+	int sockfd, numbytes, cnt;  
+	char res_buf[SIZE];
+	char *p_arg, *ip_seq = NULL, *port_seq = NULL, *file_seq = NULL;
 	struct addrinfo hints, *servinfo, *p;
 	int rv;
 	char s[INET6_ADDRSTRLEN];
+	int arglen, flag = 0;
+	FILE *fptr = NULL;
 
+	//Check if correct arguments are given
 	if (argc != 2) {
 	    fprintf(stderr,"usage: client hostname\n");
 	    exit(1);
 	}
 
-	memset(&hints, 0, sizeof(hints));
-        hints.ai_family = AF_UNSPEC;
-        hints.ai_socktype = SOCK_STREAM;
+	arglen = strlen(argv[1]);
+	if (arglen < 7 || strncmp(argv[1], "http://", 7) != 0) {
+		fprintf(stderr,"client: use the http format\n");
+	    exit(1);
+	}
+	//Process the string to extract the ip address
+	for (cnt = 0, p_arg = argv[1] + 7; (*p_arg) != '\0'; cnt++, p_arg++) {
+		if ((*p_arg) == ':')  break;
+		if ((*p_arg) == '/')  break;
+	}
+	ip_seq = malloc((cnt + 1) * sizeof(char));
+	memcpy(ip_seq, p_arg-cnt, cnt * sizeof(char));
+	ip_seq[cnt] = '\0';
 
-        addr = argv[1];
-        protocol = addr.substr(0,addr.find("//")-1);
-        addr = addr.substr(addr.find("//")+2);
-        if(addr.find('/') == addr.npos){
-                path = "/";
-        }
-        else{
-                path = addr.substr(0,addr.find('/'));
-        }
-        host = addr.substr(0,addr.find('/'));
-        if(host.find(':')!=host.npos){
-                port = host.substr(host.find(':')+1);
-                host = host.substr(0,host.find(':'));
-        }
-        else{
-                port = "80";
-        }
+	//Extract the port from the string
+	if ((*p_arg) == ':') {
+		p_arg ++;
+		for (cnt = 0; (*p_arg) != '\0' && (*p_arg) != '/'; cnt++, p_arg++);
+		port_seq = malloc((cnt + 1) * sizeof(char));
+		memcpy(port_seq, p_arg-cnt, cnt * sizeof(char));
+		port_seq[cnt] = '\0';
+	} else {
+		port_seq = malloc(3 * sizeof(char));
+		memcpy(port_seq, "80", 2 * sizeof(char));
+		port_seq[2] = '\0';
+	}
+	if ((*p_arg) == '\0') {
+		free(ip_seq);
+		free(port_seq);
+		fprintf(stderr,"client: give the file name\n");
+	    exit(1);
+	}
 
-	if ((rv = getaddrinfo(host.data(), port.data(), &hints, &servinfo)) != 0) {
+	//Extract the file sequence
+	for (cnt = 0; (*p_arg) != '\0'; cnt++, p_arg++);
+	file_seq = malloc((strlen(argv[1]) + 19) * sizeof(char));
+	memcpy(file_seq, "GET ", 4 * sizeof(char));
+	memcpy(file_seq+4, p_arg-cnt, cnt * sizeof(char));
+	memcpy(file_seq+cnt+4, " HTTP/1.1\r\n", 11 * sizeof(char));
+	memcpy(file_seq+cnt+15, "Host: ", 6 * sizeof(char));
+	memcpy(file_seq+cnt+21, argv[1]+7, (strlen(argv[1])-7-cnt) * sizeof(char));
+	memcpy(file_seq+strlen(argv[1])+14, "\r\n\r\n", 4 * sizeof(char));
+	file_seq[strlen(argv[1]) + 18] = '\0';
+
+	//Initialize adrres and info structure
+	memset(&hints, 0, sizeof hints);
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	
+	if ((rv = getaddrinfo(ip_seq, port_seq, &hints, &servinfo)) != 0) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
 		return 1;
 	}
 
-	// loop through all the results and connect to the first we can
+	free(ip_seq);
+	free(port_seq);
+	// loop through all the results and connect to the first available
 	for(p = servinfo; p != NULL; p = p->ai_next) {
 		if ((sockfd = socket(p->ai_family, p->ai_socktype,
 				p->ai_protocol)) == -1) {
@@ -90,6 +119,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (p == NULL) {
+		free(file_seq);
 		fprintf(stderr, "client: failed to connect\n");
 		return 2;
 	}
@@ -99,49 +129,55 @@ int main(int argc, char *argv[])
 	printf("client: connecting to %s\n", s);
 
 	freeaddrinfo(servinfo); // all done with this structure
-	
-	cout<<host<<" "<<port<<" "<<path<<endl;
 
-        string req = "GET " + path + " HTTP/1.1\r\n" + "User-Agent: Wget/1.12(linux-gnu)\r\n" +
-                                         "Host: " + host + ":" + port + "\r\n" + "Connection: Keep-Alive\r\n\r\n";
+	//Send HTTP request
+	numbytes = send(sockfd, file_seq, strlen(file_seq), 0);
+	if (numbytes != strlen(file_seq)) {
+		free(file_seq);
+		perror("send");
+		exit(1);
+	}
+	free(file_seq);
+	memset(res_buf, 0, sizeof(res_buf));
 
-        send(sockfd,req.c_str(),req.size(),0);
-
-        ofstream out;
-        out.open("output",ios::binary);
-        bool header = true;
-        while(true){
-                memset(buf,'\0',MAXDATASIZE);
-                numbytes = recv(sockfd,buf,MAXDATASIZE,0);
-                if(numbytes>0){
-                        cout<<numbytes<<endl;
-                        if(header){
-                                header = false;
-                                char *head = strstr(buf,"\r\n\r\n")+4;
-                                out.write(head,strlen(head));
-                        }
-                        else{
-                                out.write(buf,sizeof(char)*numbytes);
-                        }
-                }
-                else{
-                        break;
-                }
-        }
-        out.close();
-
-
-	if ((numbytes = recv(sockfd, buf, MAXDATASIZE-1, 0)) == -1) {
-	    perror("recv");
-	    exit(1);
+	if ((numbytes = recv(sockfd, res_buf, SIZE-1, 0)) == -1) {
+		perror("recv");
+		exit(1);
 	}
 
-	//buf[numbytes] = '\0';
+	printf("client: received ");
 
-	//printf("client: received '%s'\n",buf);
+	if ((fptr = fopen("output", "w")) == NULL) {
+		fprintf(stderr, "client: failed to open OUTPUT\n");
+		return 3;
+	}
+	
+	do {
+		printf("%s", res_buf);
+		if (flag == 0) {
+			for (cnt = 0; res_buf[cnt] != '\0'; cnt++) {
+				if (cnt >= 3 && res_buf[cnt-3] == '\r' && res_buf[cnt-2] == '\n' 
+							 && res_buf[cnt-1] == '\r' && res_buf[cnt] == '\n') {
+					flag = 1;
+					if (fwrite(res_buf+cnt+1, sizeof(char), numbytes-cnt-1, fptr) < numbytes-cnt-1) {
+						fprintf(stderr, "client: failed to write into OUTPUT\n");
+						return 4;
+					}
+					break;
+				} 
+			}
+		} else {
+			if (fwrite(res_buf, sizeof(char), numbytes, fptr) < numbytes) {
+				fprintf(stderr, "client: failed to write into OUTPUT\n");
+				return 4;
+			}
+		}
 
+		memset(res_buf, 0, sizeof(res_buf));
+		
+	} while ((numbytes = recv(sockfd, res_buf, SIZE-1, 0)) > 0);
+	fclose(fptr);
 	close(sockfd);
 
 	return 0;
 }
-

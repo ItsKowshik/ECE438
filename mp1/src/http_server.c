@@ -1,7 +1,8 @@
+//3180300806
 /*
 ** server.c -- a stream socket server demo
 */
-
+// Import necessary libraries
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -14,18 +15,14 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <signal.h>
-#include <iostream>
-#include <fstream>
 
-using namespace std;
-
-#define MAXDATASIZE 4096
 #define PORT "3490"  // the port users will be connecting to
+#define SIZE 1024
+
 #define BACKLOG 10	 // how many pending connections queue will hold
 
 void sigchld_handler(int s)
 {
-	s++;
 	while(waitpid(-1, NULL, WNOHANG) > 0);
 }
 
@@ -41,34 +38,37 @@ void *get_in_addr(struct sockaddr *sa)
 
 int main(int argc, char *argv[])
 {
-	int numbytes;
-	char buf[MAXDATASIZE];
-	FILE *fp;
-	int sockfd, new_fd;  // listen on sock_fd, new connection on new_fd
-	struct addrinfo hints, *servinfo, *p;
-	struct sockaddr_storage their_addr; // connector's address information
+	//If arguments not present
+	if (argc != 2) {
+	    fprintf(stderr, "Please specify port number:\n");
+	    exit(1);
+	}
+	//Create a file pointer
+	FILE *fptr = NULL;
+	int sockfd, new_fd;  	// Server socket and new connection socket
+	struct addrinfo hints, *servinfo, *p;	// Information about the server and client
+	struct sockaddr_storage their_addr; 	// Client's address information
 	socklen_t sin_size;
 	struct sigaction sa;
-	int yes=1;
-	char s[INET6_ADDRSTRLEN];
-	int rv;
-
-	if(argc!=2){
-		fprintf(stderr,"usage: server port\n");
-		exit(1);
-	}
-
-	memset(&hints, 0, sizeof(hints));
+	int yes=1;								// For socket options
+	char s[INET6_ADDRSTRLEN];				// To store the client's IP address
+	char req_header[SIZE];					//Buffer for http header request
+	char file_content[SIZE];				//Buffer for file content
+	char *file_name = NULL;					//Pointer to requested file name
+	int rv, cnt;
+	
+	//Initialize address info structure
+	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_PASSIVE; // use my IP
 
+	//Get address info of the server
 	if ((rv = getaddrinfo(NULL, argv[1], &hints, &servinfo)) != 0) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
 		return 1;
 	}
-
-	// loop through all the results and bind to the first we can
+	// Loop through all the results and bind to the first we can
 	for(p = servinfo; p != NULL; p = p->ai_next) {
 		if ((sockfd = socket(p->ai_family, p->ai_socktype,
 				p->ai_protocol)) == -1) {
@@ -98,6 +98,7 @@ int main(int argc, char *argv[])
 
 	freeaddrinfo(servinfo); // all done with this structure
 
+	//Start listening for incoming connections
 	if (listen(sockfd, BACKLOG) == -1) {
 		perror("listen");
 		exit(1);
@@ -114,8 +115,9 @@ int main(int argc, char *argv[])
 	printf("server: waiting for connections...\n");
 
 	while(1) {  // main accept() loop
-		sin_size = sizeof(their_addr);
+		sin_size = sizeof their_addr;
 		new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
+		// their_addr has the client's IP addr
 		if (new_fd == -1) {
 			perror("accept");
 			continue;
@@ -126,57 +128,57 @@ int main(int argc, char *argv[])
 			s, sizeof s);
 		printf("server: got connection from %s\n", s);
 
+		// enable concurrency
 		if (!fork()) { // this is the child process
 			close(sockfd); // child doesn't need the listener
-			
-			recv(new_fd,buf,MAXDATASIZE,0);
-			string new_buf(buf);
-			//cout<<new_buf<<endl;
-			if(new_buf.find_first_of("GET ")==0){
-				new_buf = new_buf.substr(4);
-				//cout<<new_buf<<endl;
-				if(new_buf.find(" HTTP")!=new_buf.npos){
-					string path = new_buf.substr(1,new_buf.find(" HTTP")-1);
-					cout<<path<<endl;
-					fp = fopen(path.data(),"rb");
-					if(fp!=NULL){
-						new_buf = "HTTP/1.1 200 OK\r\n\r\n";
-					}
-					else{
-						new_buf = "HTTP/1.1 404 Not Found\r\n\r\n";
-					}	
-				}
-				else{
-					new_buf = "HTTP/1.1 400 Bad Request\r\n\r\n";
-				}
-			}
-			else{
-				new_buf = "HTTP/1.1 400 Bad Request\r\n\r\n";
-			}
-			
-			if(send(new_fd,new_buf.data(),new_buf.size(),0)==-1){
-				perror("send");
-				exit(1);
-			}
+			if (recv(new_fd, req_header, SIZE-1, 0) == -1)
+				perror("recv");
 
-			memset(buf,'\0',MAXDATASIZE);
-			while(true){
-				numbytes = fread(buf,sizeof(char),MAXDATASIZE,fp);
-				if(numbytes>0){
-					if(send(new_fd,buf,numbytes,0)==-1){
+			// Check for a bad request (no "GET" in the header)
+			if (strlen(req_header) < 4 || strncmp(req_header, "GET ", 4) != 0) {
+				if (send(new_fd, "HTTP/1.1 400 Bad Request\r\n\r\n", 28, 0) == -1)
 						perror("send");
-						exit(1);
+			} else {
+				if ((req_header[4]) != '/') {
+					if (send(new_fd, "HTTP/1.1 400 Bad Request\r\n\r\n", 28, 0) == -1)
+						perror("send");
+				} else {
+					// Check for a bad request (no '/' in the request)
+					file_name = &req_header[4];
+					for (cnt = 0; file_name[cnt] != '\0'; cnt++) {
+						if (file_name[cnt] == ' ' || file_name[cnt] == '\n')  break;
+						if (file_name[cnt] == '\r')  break;
 					}
-					memset(buf,'\0',MAXDATASIZE);
+					file_name += cnt;
+					// Check for a bad request if "HTTP/1.1" is not present
+					if (strlen(file_name) < 9 || strncmp(file_name, " HTTP/1.1", 9) != 0) {
+						if (send(new_fd, "HTTP/1.1 400 Bad Request\r\n\r\n", 28, 0) == -1) 
+							perror("send");
+						file_name = NULL;
+					} else {
+						file_name = &req_header[4];
+						file_name[cnt] = '\0';
+					}
 				}
-				else{
-					break;
-				}
+				
 			}
-			fclose(fp);
-			
-			//if (send(new_fd, "Hello, world!", 13, 0) == -1)
-			//	perror("send");
+			if (file_name == NULL);
+			 // Handle the case where the file is not present
+			else if ((fptr = fopen(file_name+1, "r")) == NULL) {
+				if (send(new_fd, "HTTP/1.1 404 Not Found\r\n\r\n", 26, 0) == -1)
+					perror("send");
+			} else {
+				 // File is successfully found
+				memset(file_content, 0, sizeof(file_content));
+				memcpy(file_content, "HTTP/1.1 200 OK\r\n\r\n", 19);
+				fread(file_content+19, sizeof(char), SIZE-20, fptr);
+				do {
+					if (send(new_fd, file_content, strlen(file_content), 0) == -1)
+						perror("send");
+					memset(file_content, 0, sizeof(file_content));
+				} while (fread(file_content, sizeof(char), SIZE-1, fptr) > 0);
+			}
+			fclose(fptr);
 			close(new_fd);
 			exit(0);
 		}
@@ -185,4 +187,3 @@ int main(int argc, char *argv[])
 
 	return 0;
 }
-
